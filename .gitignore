@@ -1,0 +1,7 @@
+release/
+.idea/
+*.bz2
+lib/
+cmake-build-debug/
+share/
+CMakeLists.txt
