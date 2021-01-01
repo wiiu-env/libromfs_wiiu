@@ -231,10 +231,13 @@ static void romfs_mountclose(romfs_mount *mount) {
     if (mount->fd_type == RomfsSource_FileDescriptor) {
         close(mount->fd);
     }
-    if (mount->fd_type == RomfsSource_FileDescriptor) {
+    if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
         FSCmdBlock cmd;
         FSInitCmdBlock(&cmd);
         FSCloseFile(&mount->cafe_client, &cmd, mount->cafe_fd, FS_ERROR_FLAG_ALL);
+        mount->cafe_fd = 0;
+        FSDelClient(&mount->cafe_client, 0);
+        memset(&mount->cafe_client, 0, sizeof(FSClient));
     }
     romfs_free(mount);
 }
@@ -354,10 +357,6 @@ int32_t romfsUnmount(const char *name) {
     mount = romfsFindMount(name);
     if (mount == NULL) {
         return -1;
-    }
-
-    if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
-        FSDelClient(&mount->cafe_client, 0);
     }
 
     // Remove device
