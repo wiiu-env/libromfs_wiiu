@@ -377,14 +377,33 @@ int32_t romfsUnmount(const char *name) {
 
 //-----------------------------------------------------------------------------
 
+static inline uint8_t normalizePathChar(uint8_t c) {
+    if (c >= 'a' && c <= 'z') {
+        return c + 'A' - 'a';
+    } else {
+        return c;
+    }
+}
+
 static uint32_t calcHash(uint32_t parent, const uint8_t *name, uint32_t namelen, uint32_t total) {
     uint32_t hash = parent ^123456789;
     uint32_t i;
     for (i = 0; i < namelen; i++) {
         hash = (hash >> 5) | (hash << 27);
-        hash ^= name[i];
+        hash ^= normalizePathChar(name[i]);
     }
     return hash % total;
+}
+
+static bool comparePaths(const uint8_t *name1, const uint8_t *name2, uint32_t namelen) {
+    for (uint32_t i = 0; i < namelen; i++) {
+        uint8_t c1 = normalizePathChar(name1[i]);
+        uint8_t c2 = normalizePathChar(name2[i]);
+        if (c1 != c2) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static int searchForDir(romfs_mount *mount, romfs_dir *parent, const uint8_t *name, uint32_t namelen, romfs_dir **out) {
@@ -402,7 +421,7 @@ static int searchForDir(romfs_mount *mount, romfs_dir *parent, const uint8_t *na
         if (curDir->nameLen != namelen) {
             continue;
         }
-        if (memcmp(curDir->name, name, namelen) != 0) {
+        if (!comparePaths(curDir->name, name, namelen)) {
             continue;
         }
         *out = curDir;
@@ -429,7 +448,7 @@ static int searchForFile(romfs_mount *mount, romfs_dir *parent, const uint8_t *n
         if (curFile->nameLen != namelen) {
             continue;
         }
-        if (memcmp(curFile->name, name, namelen) != 0) {
+        if (!comparePaths(curFile->name, name, namelen)) {
             continue;
         }
         *out = curFile;
