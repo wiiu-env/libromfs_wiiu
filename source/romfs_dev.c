@@ -286,6 +286,10 @@ int32_t romfsMountCommon(const char *name, romfs_mount *mount) {
         goto fail_io;
     }
 
+    if (memcmp(&mount->header.headerMagic, "WUHB", sizeof(mount->header.headerMagic)) != 0) {
+        goto fail_io;
+    }
+
     if (mount->header.headerSize != 0x50) {
         goto fail_io;
     }

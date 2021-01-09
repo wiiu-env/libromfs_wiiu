@@ -13,7 +13,8 @@
 
 /// RomFS header.
 typedef struct {
-    uint64_t headerSize;        ///< Size of the header.
+    uint32_t headerMagic;       ///< Magic value.
+    uint32_t headerSize;        ///< Size of the header.
     uint64_t dirHashTableOff;   ///< Offset of the directory hash table.
     uint64_t dirHashTableSize;  ///< Size of the directory hash table.
     uint64_t dirTableOff;       ///< Offset of the directory table.
