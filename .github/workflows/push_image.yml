@@ -23,4 +23,4 @@ jobs:
         snapshot: true
         cache: true
         tags: "latest, ${{ env.RELEASE_VERSION }}"
-        dockerfile: Dockerfile.wiiu
+        dockerfile: Dockerfile
