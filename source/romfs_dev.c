@@ -44,14 +44,14 @@ static char __component[PATH_MAX + 1];
 
 static romfs_dir *romFS_dir(romfs_mount *mount, uint32_t off) {
     if (off + sizeof(romfs_dir) > mount->header.dirTableSize) { return NULL; }
-    romfs_dir *curDir = ((romfs_dir * )((uint8_t *) mount->dirTable + off));
+    romfs_dir *curDir = ((romfs_dir *) ((uint8_t *) mount->dirTable + off));
     if (off + sizeof(romfs_dir) + curDir->nameLen > mount->header.dirTableSize) { return NULL; }
     return curDir;
 }
 
 static romfs_file *romFS_file(romfs_mount *mount, uint32_t off) {
     if (off + sizeof(romfs_file) > mount->header.fileTableSize) { return NULL; }
-    romfs_file *curFile = ((romfs_file * )((uint8_t *) mount->fileTable + off));
+    romfs_file *curFile = ((romfs_file *) ((uint8_t *) mount->fileTable + off));
     if (off + sizeof(romfs_file) + curFile->nameLen > mount->header.fileTableSize) { return NULL; }
     return curFile;
 }
@@ -386,7 +386,7 @@ static inline uint8_t normalizePathChar(uint8_t c) {
 }
 
 static uint32_t calcHash(uint32_t parent, const uint8_t *name, uint32_t namelen, uint32_t total) {
-    uint32_t hash = parent ^123456789;
+    uint32_t hash = parent ^ 123456789;
     uint32_t i;
     for (i = 0; i < namelen; i++) {
         hash = (hash >> 5) | (hash << 27);
@@ -437,7 +437,7 @@ static int searchForFile(romfs_mount *mount, romfs_dir *parent, const uint8_t *n
     uint32_t curOff;
     *out = NULL;
     for (curOff = mount->fileHashTable[hash]; curOff != romFS_none;
-    curOff = curFile->nextHash) {
+         curOff = curFile->nextHash) {
         curFile = romFS_file(mount, curOff);
         if (curFile == NULL) {
             return EFAULT;

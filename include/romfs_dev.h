@@ -61,7 +61,7 @@ typedef enum {
  * @brief Mounts the Application's RomFS.
  * @param name Device mount name.
  */
-int32_t romfsMount(const char *name, const char * path, RomfsSource source);
+int32_t romfsMount(const char *name, const char *path, RomfsSource source);
 
 /**
  * @brief Mounts RomFS from an open file.
@@ -80,7 +80,7 @@ typedef struct {
     uint64_t offset; ///< Length of the file's data.
 } romfs_fileInfo;
 
-int romfsGetFileInfoPerPath(const char* romfs, const char *path, romfs_fileInfo* out);
+int romfsGetFileInfoPerPath(const char *romfs, const char *path, romfs_fileInfo *out);
 
 #ifdef __cplusplus
 }
