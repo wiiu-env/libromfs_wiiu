@@ -102,7 +102,7 @@ export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 all: lib/libromfs.a
 
 dist-bin: all
-	@tar --exclude=*~ -cjf libromfs-$(VERSION).tar.bz2 include lib share
+	@tar --exclude=*~ -cjf libromfs-$(VERSION).tar.bz2 include lib
 
 dist-src:
 	@tar --exclude=*~ -cjf libromfs-src-$(VERSION).tar.bz2 include source Makefile
@@ -114,9 +114,6 @@ install: dist-bin
 	bzip2 -cd libromfs-$(VERSION).tar.bz2 | tar -xf - -C $(DESTDIR)$(DEVKITPRO)/wut/usr
 
 lib:
-	@[ -d $@ ] || mkdir -p $@
-    
-share:
 	@[ -d $@ ] || mkdir -p $@
 
 release:
