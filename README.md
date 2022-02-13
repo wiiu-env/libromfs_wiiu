@@ -1,3 +1,5 @@
+[![Publish Docker Image](https://github.com/wiiu-env/libromfs_wiiu/actions/workflows/push_image.yml/badge.svg)](https://github.com/wiiu-env/libromfs_wiiu/actions/workflows/push_image.yml)
+
 # libromfs
 Ported from [libnx](https://github.com/switchbrew/libnx/blob/e5ae43f4c2cca5320559d9c27ce256b2901aed40/nx/source/runtime/devices/romfs_dev.c)
 
@@ -16,3 +18,7 @@ COPY --from=wiiuenv/libromfs_wiiu:[tag] /artifacts $DEVKITPRO
 ```
 Replace [tag] with a tag you want to use, a list of tags can be found [here](https://hub.docker.com/r/wiiuenv/libromfs_wiiu/tags).
 It's highly recommended to pin the version to the **latest date** instead of using `latest`.
+
+## Format the code via docker
+
+`docker run --rm -v ${PWD}:/src wiiuenv/clang-format:13.0.0-2 -r ./source ./include -i`
