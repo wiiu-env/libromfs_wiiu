@@ -34,7 +34,7 @@ typedef struct {
     uint32_t childFile; ///< Offset of the first file.
     uint32_t nextHash;  ///< Directory hash table pointer.
     uint32_t nameLen;   ///< Name length.
-    uint8_t name[];    ///< Name. (UTF-8)
+    uint8_t name[];     ///< Name. (UTF-8)
 } romfs_dir;
 
 /// RomFS file.
@@ -45,7 +45,7 @@ typedef struct {
     uint64_t dataSize; ///< Length of the file's data.
     uint32_t nextHash; ///< File hash table pointer.
     uint32_t nameLen;  ///< Name length.
-    uint8_t name[];   ///< Name. (UTF-8)
+    uint8_t name[];    ///< Name. (UTF-8)
 } romfs_file;
 
 #ifdef __cplusplus
@@ -76,7 +76,7 @@ int32_t romfsUnmount(const char *name);
 
 /// RomFS file.
 typedef struct {
-    uint64_t length;  ///< Offset of the file's data.
+    uint64_t length; ///< Offset of the file's data.
     uint64_t offset; ///< Length of the file's data.
 } romfs_fileInfo;
 
@@ -85,4 +85,3 @@ int romfsGetFileInfoPerPath(const char *romfs, const char *path, romfs_fileInfo 
 #ifdef __cplusplus
 }
 #endif
-
