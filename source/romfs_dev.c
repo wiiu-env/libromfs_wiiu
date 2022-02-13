@@ -84,7 +84,7 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
         if (result < 0) {
             return -1;
         }
-        return (ssize_t) result;
+        return result;
     }
     return _read;
 }
@@ -205,8 +205,6 @@ static romfs_mount *romfsFindMount(const char *name) {
     return NULL;
 }
 
-__attribute__((weak)) const char *__romfs_path = NULL;
-
 static romfs_mount *romfs_alloc(void) {
     return romfsFindMount(NULL);
 }
@@ -245,7 +243,7 @@ static void romfs_mountclose(romfs_mount *mount) {
 int32_t romfsMount(const char *name, const char *filepath, RomfsSource source) {
     romfs_mount *mount = romfs_alloc();
     if (mount == NULL) {
-        return 99;
+        return -99;
     }
 
     // Regular RomFS
@@ -343,11 +341,11 @@ int32_t romfsMountCommon(const char *name, romfs_mount *mount) {
 
 fail_oom:
     romfs_mountclose(mount);
-    return 9;
+    return -9;
 
 fail_io:
     romfs_mountclose(mount);
-    return 10;
+    return -10;
 }
 
 static void romfsInitMtime(romfs_mount *mount) {
