@@ -59,22 +59,51 @@ static romfs_file *romFS_file(romfs_mount *mount, uint32_t off) {
 }
 
 static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, uint64_t size) {
+    if (size == 0) {
+        return 0;
+    }
     uint64_t pos = mount->offset + offset;
-    size_t _read = 0;
     if (mount->fd_type == RomfsSource_FileDescriptor) {
         off_t seek_offset = lseek(mount->fd, pos, SEEK_SET);
         if (pos != seek_offset) {
             return -1;
         }
-        _read = read(mount->fd, buffer, size);
+        return read(mount->fd, buffer, size);
     } else if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
         FSCmdBlock cmd;
         FSInitCmdBlock(&cmd);
-        FSStatus result;
+        FSStatus result = 0;
         if ((((uint32_t) buffer) & 0x3F) == 0) {
-            result = FSReadFileWithPos(&mount->cafe_client, &cmd, (uint8_t *) buffer, 1, size, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+            // The buffer size needs to be a multiple of 0x40
+            if ((size & 0x3F) == 0) {
+                result = FSReadFileWithPos(&mount->cafe_client, &cmd, (uint8_t *) buffer, 1, size, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+            } else {
+                uint64_t readLen = size & ~(0x3F);
+                if (readLen > 0) {
+                    result = FSReadFileWithPos(&mount->cafe_client, &cmd, (uint8_t *) buffer, 1, readLen, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+                    if (result < 0 || readLen != result) {
+                        return -1;
+                    }
+                    offset += readLen;
+                }
+
+                uint8_t bufferStack[0x80];
+                uint64_t readRemaining = size - readLen;
+                uint8_t *alignedBuffer = (uint8_t *) (((uint32_t) bufferStack + 0x3F) & ~(0x3F));
+
+                FSStatus otherResult = FSReadFileWithPos(&mount->cafe_client, &cmd, alignedBuffer, 1, readRemaining, offset, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+
+                if (otherResult < 0 || otherResult != readRemaining) {
+                    return -1;
+                }
+
+                memcpy(buffer + readLen, alignedBuffer, readRemaining);
+                result += (uint32_t) otherResult;
+            }
         } else {
-            uint8_t *buffer_ = (uint8_t *) memalign(0x40, size);
+            // The buffer needs to be aligned to 0x40
+            // The buffer size needs to be a multiple of 0x40
+            uint8_t *buffer_ = (uint8_t *) memalign(0x40, (size + 0x3F) & ~(0x3F));
             if (!buffer_) {
                 return -1;
             }
@@ -88,7 +117,7 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
         }
         return result;
     }
-    return _read;
+    return -1;
 }
 
 static bool _romfs_read_chk(romfs_mount *mount, uint64_t offset, void *buffer, uint64_t size) {
