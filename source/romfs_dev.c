@@ -1,5 +1,6 @@
 #include <coreinit/cache.h>
 #include <coreinit/filesystem.h>
+#include <coreinit/mutex.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -29,6 +30,7 @@ typedef struct romfs_mount {
     char name[32];
     FSFileHandle cafe_fd;
     FSClient cafe_client;
+    OSMutex cafe_mutex;
 } romfs_mount;
 
 extern int __system_argc;
@@ -256,6 +258,8 @@ int32_t romfsMount(const char *name, const char *filepath, RomfsSource source) {
             return -1;
         }
     } else if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
+        memset(&mount->cafe_mutex, 0, sizeof(OSMutex));
+        OSInitMutex(&mount->cafe_mutex);
         memset(&mount->cafe_client, 0, sizeof(FSClient));
         if (FSAddClient(&mount->cafe_client, FS_ERROR_FLAG_ALL) != FS_STATUS_OK) {
             romfs_free(mount);
@@ -468,6 +472,7 @@ static int navigateToDir(romfs_mount *mount, romfs_dir **ppDir, const char **pPa
         (*pPath)++;
     }
 
+    OSLockMutex(&mount->cafe_mutex);
     while (**pPath) {
         char *slashPos  = strchr(*pPath, '/');
         char *component = __component;
@@ -475,9 +480,11 @@ static int navigateToDir(romfs_mount *mount, romfs_dir **ppDir, const char **pPa
         if (slashPos) {
             uint32_t len = slashPos - *pPath;
             if (!len) {
+                OSUnlockMutex(&mount->cafe_mutex);
                 return EILSEQ;
             }
             if (len > PATH_MAX) {
+                OSUnlockMutex(&mount->cafe_mutex);
                 return ENAMETOOLONG;
             }
 
@@ -488,6 +495,7 @@ static int navigateToDir(romfs_mount *mount, romfs_dir **ppDir, const char **pPa
             component = (char *) *pPath;
             *pPath += strlen(component);
         } else {
+            OSUnlockMutex(&mount->cafe_mutex);
             return 0;
         }
 
@@ -496,6 +504,7 @@ static int navigateToDir(romfs_mount *mount, romfs_dir **ppDir, const char **pPa
             if (component[1] == '.' && !component[2]) {
                 *ppDir = romFS_dir(mount, (*ppDir)->parent);
                 if (!*ppDir) {
+                    OSUnlockMutex(&mount->cafe_mutex);
                     return EFAULT;
                 }
                 continue;
@@ -504,9 +513,11 @@ static int navigateToDir(romfs_mount *mount, romfs_dir **ppDir, const char **pPa
 
         int ret = searchForDir(mount, *ppDir, (uint8_t *) component, strlen(component), ppDir);
         if (ret != 0) {
+            OSUnlockMutex(&mount->cafe_mutex);
             return ret;
         }
     }
+    OSUnlockMutex(&mount->cafe_mutex);
 
     return 0;
 }
