@@ -71,51 +71,68 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
         return read(mount->fd, buffer, size);
     } else if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
         FSCmdBlock cmd;
+        FSStatus status;
         FSInitCmdBlock(&cmd);
-        FSStatus result = 0;
-        if ((((uint32_t) buffer) & 0x3F) == 0) {
-            // The buffer size needs to be a multiple of 0x40
-            if ((size & 0x3F) == 0) {
-                result = FSReadFileWithPos(&mount->cafe_client, &cmd, (uint8_t *) buffer, 1, size, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
-            } else {
-                uint64_t readLen = size & ~(0x3F);
-                if (readLen > 0) {
-                    result = FSReadFileWithPos(&mount->cafe_client, &cmd, (uint8_t *) buffer, 1, readLen, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
-                    if (result < 0 || readLen != result) {
-                        return -1;
-                    }
-                    offset += readLen;
-                }
+        uint32_t bytesRead = 0;
 
-                uint8_t bufferStack[0x80];
-                uint64_t readRemaining = size - readLen;
-                uint8_t *alignedBuffer = (uint8_t *) (((uint32_t) bufferStack + 0x3F) & ~(0x3F));
+        __attribute__((aligned(0x40))) uint8_t alignedBuffer[0x40];
 
-                FSStatus otherResult = FSReadFileWithPos(&mount->cafe_client, &cmd, alignedBuffer, 1, readRemaining, offset, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+        uint32_t ptrAligned      = ((uint32_t) buffer + 0x3F) & ~(0x3F);
+        uint32_t lenToAlignedPtr = ptrAligned - (uint32_t) buffer;
+        uint32_t headLen         = lenToAlignedPtr > size ? size : lenToAlignedPtr;
+        uint32_t remainingLen    = size;
 
-                if (otherResult < 0 || otherResult != readRemaining) {
-                    return -1;
-                }
-
-                memcpy(buffer + readLen, alignedBuffer, readRemaining);
-                result += (uint32_t) otherResult;
-            }
-        } else {
-            // The buffer needs to be aligned to 0x40
-            // The buffer size needs to be a multiple of 0x40
-            uint8_t *buffer_ = (uint8_t *) memalign(0x40, (size + 0x3F) & ~(0x3F));
-            if (!buffer_) {
+        // read "head
+        if (headLen > 0) {
+            status = FSReadFileWithPos(&mount->cafe_client, &cmd, alignedBuffer, 1,
+                                       headLen, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+            if (status < 0) {
                 return -1;
+            } else if (status > 0) {
+                memcpy(buffer, alignedBuffer, (uint32_t) status);
+                bytesRead += (uint32_t) status;
+                pos += (uint32_t) status;
+                buffer += status;
+                remainingLen -= status;
             }
-            result = FSReadFileWithPos(&mount->cafe_client, &cmd, buffer_, 1, size, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
-            memcpy(buffer, buffer_, size);
-            free(buffer_);
+
+            // Return when we've read partial data or finished reading all data
+            if (status < headLen || remainingLen == 0) {
+                return bytesRead;
+            }
         }
 
-        if (result < 0) {
-            return -1;
+        uint32_t bodyLen = remainingLen & ~(0x3F);
+        // read "body"
+        if (bodyLen > 0) {
+            status = FSReadFileWithPos(&mount->cafe_client, &cmd, buffer, 1,
+                                       bodyLen, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+            if (status < 0) {
+                return -1;
+            } else if (status > 0) {
+                bytesRead += (uint32_t) status;
+                buffer += status;
+                pos += status;
+                remainingLen -= status;
+            }
+
+            // Return when we've read partial data or finished reading all data
+            if (status < bodyLen || remainingLen == 0) {
+                return bytesRead;
+            }
         }
-        return result;
+
+        // read "tail"
+        status = FSReadFileWithPos(&mount->cafe_client, &cmd, alignedBuffer, 1,
+                                   remainingLen, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+        if (status < 0) {
+            return -1;
+        } else if (status > 0) {
+            memcpy(buffer, alignedBuffer, (uint32_t) status);
+            bytesRead += (uint32_t) status;
+        }
+
+        return bytesRead;
     }
     return -1;
 }
