@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "romfs_dev.h"
+#include <mutex>
 
 typedef struct romfs_mount {
     devoptab_t device;
@@ -62,10 +63,11 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
     if (size == 0) {
         return 0;
     }
+
     uint64_t pos = mount->offset + offset;
     if (mount->fd_type == RomfsSource_FileDescriptor) {
         off_t seek_offset = lseek(mount->fd, pos, SEEK_SET);
-        if (pos != seek_offset) {
+        if (seek_offset < 0 || (off_t) pos != seek_offset) {
             return -1;
         }
         return read(mount->fd, buffer, size);
@@ -92,12 +94,12 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
                 memcpy(buffer, alignedBuffer, (uint32_t) status);
                 bytesRead += (uint32_t) status;
                 pos += (uint32_t) status;
-                buffer += status;
+                buffer = (void *) ((uint32_t) buffer + status);
                 remainingLen -= status;
             }
 
             // Return when we've read partial data or finished reading all data
-            if (status < headLen || remainingLen == 0) {
+            if ((uint32_t) status < headLen || remainingLen == 0) {
                 return bytesRead;
             }
         }
@@ -105,19 +107,19 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
         uint32_t bodyLen = remainingLen & ~(0x3F);
         // read "body"
         if (bodyLen > 0) {
-            status = FSReadFileWithPos(&mount->cafe_client, &cmd, buffer, 1,
+            status = FSReadFileWithPos(&mount->cafe_client, &cmd, (uint8_t *) buffer, 1,
                                        bodyLen, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
             if (status < 0) {
                 return -1;
             } else if (status > 0) {
                 bytesRead += (uint32_t) status;
-                buffer += status;
+                buffer = (void *) ((uint32_t) buffer + status);
                 pos += status;
                 remainingLen -= status;
             }
 
             // Return when we've read partial data or finished reading all data
-            if (status < bodyLen || remainingLen == 0) {
+            if ((uint32_t) status < bodyLen || remainingLen == 0) {
                 return bytesRead;
             }
         }
@@ -138,7 +140,7 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
 }
 
 static bool _romfs_read_chk(romfs_mount *mount, uint64_t offset, void *buffer, uint64_t size) {
-    return _romfs_read(mount, offset, buffer, size) == size;
+    return _romfs_read(mount, offset, buffer, size) == (int64_t) size;
 }
 
 //-----------------------------------------------------------------------------
@@ -282,15 +284,19 @@ static void romfs_mountclose(romfs_mount *mount) {
         FSInitCmdBlock(&cmd);
         FSCloseFile(&mount->cafe_client, &cmd, mount->cafe_fd, FS_ERROR_FLAG_ALL);
         mount->cafe_fd = 0;
-        FSDelClient(&mount->cafe_client, 0);
+        FSDelClient(&mount->cafe_client, FS_ERROR_FLAG_ALL);
         memset(&mount->cafe_client, 0, sizeof(FSClient));
     }
     romfs_free(mount);
 }
 
+std::mutex romfsMutex;
+
 int32_t romfsMount(const char *name, const char *filepath, RomfsSource source) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_mount *mount = romfs_alloc();
-    if (mount == NULL) {
+    if (mount == nullptr) {
+        OSMemoryBarrier();
         return -99;
     }
 
@@ -301,6 +307,7 @@ int32_t romfsMount(const char *name, const char *filepath, RomfsSource source) {
         mount->fd = open(filepath, 0);
         if (mount->fd == -1) {
             romfs_free(mount);
+            OSMemoryBarrier();
             return -1;
         }
     } else if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
@@ -309,6 +316,7 @@ int32_t romfsMount(const char *name, const char *filepath, RomfsSource source) {
         memset(&mount->cafe_client, 0, sizeof(FSClient));
         if (FSAddClient(&mount->cafe_client, FS_ERROR_FLAG_ALL) != FS_STATUS_OK) {
             romfs_free(mount);
+            OSMemoryBarrier();
             return -1;
         }
         FSCmdBlock cmd;
@@ -317,11 +325,14 @@ int32_t romfsMount(const char *name, const char *filepath, RomfsSource source) {
         if (result != FS_STATUS_OK) {
             FSDelClient(&mount->cafe_client, FS_ERROR_FLAG_ALL);
             romfs_free(mount);
+            OSMemoryBarrier();
             return -1;
         }
     }
 
-    return romfsMountCommon(name, mount);
+    auto res = romfsMountCommon(name, mount);
+    OSMemoryBarrier();
+    return res;
 }
 
 int32_t romfsMountCommon(const char *name, romfs_mount *mount) {
@@ -403,11 +414,13 @@ static void romfsInitMtime(romfs_mount *mount) {
 }
 
 int32_t romfsUnmount(const char *name) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_mount *mount;
     char tmpname[34];
 
     mount = romfsFindMount(name);
     if (mount == NULL) {
+        OSMemoryBarrier();
         return -1;
     }
 
@@ -420,6 +433,7 @@ int32_t romfsUnmount(const char *name) {
 
     romfs_mountclose(mount);
 
+    OSMemoryBarrier();
     return 0;
 }
 
@@ -603,21 +617,25 @@ static ino_t file_inode(romfs_mount *mount, romfs_file *file) {
 }
 
 int romfsGetFileInfoPerPath(const char *romfs, const char *path, romfs_fileInfo *out) {
-    if (out == NULL) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
+    if (out == nullptr) {
         return -1;
     }
-    romfs_mount *mount = (romfs_mount *) romfsFindMount(romfs);
-    if (mount == NULL) {
+    auto *mount = (romfs_mount *) romfsFindMount(romfs);
+    if (mount == nullptr) {
+        OSMemoryBarrier();
         return -2;
     }
-    romfs_dir *curDir = NULL;
+    romfs_dir *curDir = nullptr;
     int errno2        = navigateToDir(mount, &curDir, &path, false);
     if (errno2 != 0) {
+        OSMemoryBarrier();
         return -3;
     }
-    romfs_file *file = NULL;
+    romfs_file *file = nullptr;
     int err          = searchForFile(mount, curDir, (uint8_t *) path, strlen(path), &file);
     if (err != 0) {
+        OSMemoryBarrier();
         return -4;
     }
 
@@ -627,22 +645,24 @@ int romfsGetFileInfoPerPath(const char *romfs, const char *path, romfs_fileInfo 
     return 0;
 }
 
-
 //-----------------------------------------------------------------------------
 
 int romfs_open(struct _reent *r, void *fileStruct, const char *path, int flags, int mode) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_fileobj *fileobj = (romfs_fileobj *) fileStruct;
 
     fileobj->mount = (romfs_mount *) r->deviceData;
 
     if ((flags & O_ACCMODE) != O_RDONLY) {
         r->_errno = EROFS;
+        OSMemoryBarrier();
         return -1;
     }
 
     romfs_dir *curDir = NULL;
     r->_errno         = navigateToDir(fileobj->mount, &curDir, &path, false);
     if (r->_errno != 0) {
+        OSMemoryBarrier();
         return -1;
     }
 
@@ -657,6 +677,7 @@ int romfs_open(struct _reent *r, void *fileStruct, const char *path, int flags, 
         return -1;
     } else if ((flags & O_CREAT) && (flags & O_EXCL)) {
         r->_errno = EEXIST;
+        OSMemoryBarrier();
         return -1;
     }
 
@@ -664,6 +685,7 @@ int romfs_open(struct _reent *r, void *fileStruct, const char *path, int flags, 
     fileobj->offset = fileobj->mount->header.fileDataOff + file->dataOff;
     fileobj->pos    = 0;
 
+    OSMemoryBarrier();
     return 0;
 }
 
@@ -672,11 +694,13 @@ int romfs_close(struct _reent *r, void *fd) {
 }
 
 ssize_t romfs_read(struct _reent *r, void *fd, char *ptr, size_t len) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_fileobj *file = (romfs_fileobj *) fd;
     uint64_t endPos     = file->pos + len;
 
     /* check if past end-of-file */
     if (file->pos >= file->file->dataSize) {
+        OSMemoryBarrier();
         return 0;
     }
 
@@ -689,14 +713,17 @@ ssize_t romfs_read(struct _reent *r, void *fd, char *ptr, size_t len) {
     ssize_t adv = _romfs_read(file->mount, file->offset + file->pos, ptr, len);
     if (adv >= 0) {
         file->pos += adv;
+        OSMemoryBarrier();
         return adv;
     }
 
     r->_errno = EIO;
+    OSMemoryBarrier();
     return -1;
 }
 
 off_t romfs_seek(struct _reent *r, void *fd, off_t pos, int dir) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_fileobj *file = (romfs_fileobj *) fd;
     off_t start;
     switch (dir) {
@@ -714,6 +741,7 @@ off_t romfs_seek(struct _reent *r, void *fd, off_t pos, int dir) {
 
         default:
             r->_errno = EINVAL;
+            OSMemoryBarrier();
             return -1;
     }
 
@@ -721,16 +749,19 @@ off_t romfs_seek(struct _reent *r, void *fd, off_t pos, int dir) {
     if (pos < 0) {
         if (start + pos < 0) {
             r->_errno = EINVAL;
+            OSMemoryBarrier();
             return -1;
         }
     }
     /* check for overflow */
     else if (INT64_MAX - pos < start) {
         r->_errno = EOVERFLOW;
+        OSMemoryBarrier();
         return -1;
     }
 
     file->pos = start + pos;
+    OSMemoryBarrier();
     return file->pos;
 }
 
@@ -757,22 +788,27 @@ static void fillFile(struct stat *st, romfs_mount *mount, romfs_file *file) {
 }
 
 int romfs_fstat(struct _reent *r, void *fd, struct stat *st) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_fileobj *fileobj = (romfs_fileobj *) fd;
     fillFile(st, fileobj->mount, fileobj->file);
 
+    OSMemoryBarrier();
     return 0;
 }
 
 int romfs_stat(struct _reent *r, const char *path, struct stat *st) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_mount *mount = (romfs_mount *) r->deviceData;
     romfs_dir *curDir  = NULL;
     r->_errno          = navigateToDir(mount, &curDir, &path, false);
     if (r->_errno != 0) {
+        OSMemoryBarrier();
         return -1;
     }
 
     if (!*path) {
         fillDir(st, mount, curDir);
+        OSMemoryBarrier();
         return 0;
     }
 
@@ -781,11 +817,12 @@ int romfs_stat(struct _reent *r, const char *path, struct stat *st) {
     ret            = searchForDir(mount, curDir, (uint8_t *) path, strlen(path), &dir);
     if (ret != 0 && ret != ENOENT) {
         r->_errno = ret;
+        OSMemoryBarrier();
         return -1;
     }
     if (ret == 0) {
         fillDir(st, mount, dir);
-
+        OSMemoryBarrier();
         return 0;
     }
 
@@ -793,36 +830,44 @@ int romfs_stat(struct _reent *r, const char *path, struct stat *st) {
     ret              = searchForFile(mount, curDir, (uint8_t *) path, strlen(path), &file);
     if (ret != 0 && ret != ENOENT) {
         r->_errno = ret;
+        OSMemoryBarrier();
         return -1;
     }
     if (ret == 0) {
         fillFile(st, mount, file);
+        OSMemoryBarrier();
         return 0;
     }
 
     r->_errno = ENOENT;
+    OSMemoryBarrier();
     return -1;
 }
 
 int romfs_chdir(struct _reent *r, const char *path) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_mount *mount = (romfs_mount *) r->deviceData;
     romfs_dir *curDir  = NULL;
     r->_errno          = navigateToDir(mount, &curDir, &path, true);
     if (r->_errno != 0) {
+        OSMemoryBarrier();
         return -1;
     }
 
     mount->cwd = curDir;
+    OSMemoryBarrier();
     return 0;
 }
 
 DIR_ITER *romfs_diropen(struct _reent *r, DIR_ITER *dirState, const char *path) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_diriter *iter = (romfs_diriter *) (dirState->dirStruct);
     romfs_dir *curDir   = NULL;
     iter->mount         = (romfs_mount *) r->deviceData;
 
     r->_errno = navigateToDir(iter->mount, &curDir, &path, true);
     if (r->_errno != 0) {
+        OSMemoryBarrier();
         return NULL;
     }
 
@@ -831,20 +876,24 @@ DIR_ITER *romfs_diropen(struct _reent *r, DIR_ITER *dirState, const char *path) 
     iter->childDir  = curDir->childDir;
     iter->childFile = curDir->childFile;
 
+    OSMemoryBarrier();
     return dirState;
 }
 
 int romfs_dirreset(struct _reent *r, DIR_ITER *dirState) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_diriter *iter = (romfs_diriter *) (dirState->dirStruct);
 
     iter->state     = 0;
     iter->childDir  = iter->dir->childDir;
     iter->childFile = iter->dir->childFile;
 
+    OSMemoryBarrier();
     return 0;
 }
 
 int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct stat *filestat) {
+    std::lock_guard<std::mutex> lock(romfsMutex);
     romfs_diriter *iter = (romfs_diriter *) (dirState->dirStruct);
 
     if (iter->state == 0) {
@@ -855,12 +904,14 @@ int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct s
 
         strcpy(filename, ".");
         iter->state = 1;
+        OSMemoryBarrier();
         return 0;
     } else if (iter->state == 1) {
         /* '..' entry */
         romfs_dir *dir = romFS_dir(iter->mount, iter->dir->parent);
         if (!dir) {
             r->_errno = EFAULT;
+            OSMemoryBarrier();
             return -1;
         }
 
@@ -870,6 +921,7 @@ int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct s
 
         strcpy(filename, "..");
         iter->state = 2;
+        OSMemoryBarrier();
         return 0;
     }
 
@@ -877,6 +929,7 @@ int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct s
         romfs_dir *dir = romFS_dir(iter->mount, iter->childDir);
         if (!dir) {
             r->_errno = EFAULT;
+            OSMemoryBarrier();
             return -1;
         }
 
@@ -890,16 +943,19 @@ int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct s
 
         if (dir->nameLen >= NAME_MAX) {
             r->_errno = ENAMETOOLONG;
+            OSMemoryBarrier();
             return -1;
         }
 
         strncpy(filename, (char *) dir->name, dir->nameLen);
 
+        OSMemoryBarrier();
         return 0;
     } else if (iter->childFile != romFS_none) {
         romfs_file *file = romFS_file(iter->mount, iter->childFile);
         if (!file) {
             r->_errno = EFAULT;
+            OSMemoryBarrier();
             return -1;
         }
 
@@ -913,15 +969,18 @@ int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct s
 
         if (file->nameLen >= NAME_MAX) {
             r->_errno = ENAMETOOLONG;
+            OSMemoryBarrier();
             return -1;
         }
 
         strncpy(filename, (char *) file->name, file->nameLen);
 
+        OSMemoryBarrier();
         return 0;
     }
 
     r->_errno = ENOENT;
+    OSMemoryBarrier();
     return -1;
 }
 
