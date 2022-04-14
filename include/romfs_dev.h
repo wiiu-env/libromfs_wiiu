@@ -11,6 +11,10 @@
 
 #include <wut.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /// RomFS header.
 typedef struct {
     uint32_t headerMagic;       ///< Magic value.
@@ -47,10 +51,6 @@ typedef struct {
     uint32_t nameLen;  ///< Name length.
     uint8_t name[];    ///< Name. (UTF-8)
 } romfs_file;
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 typedef enum {
     RomfsSource_FileDescriptor,
