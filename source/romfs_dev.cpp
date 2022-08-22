@@ -1,16 +1,12 @@
 #include <coreinit/cache.h>
-#include <coreinit/filesystem.h>
+#include <coreinit/filesystem_fsa.h>
 #include <coreinit/mutex.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <malloc.h>
-#include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/dirent.h>
 #include <sys/iosupport.h>
-#include <sys/param.h>
 #include <unistd.h>
 
 #include "romfs_dev.h"
@@ -29,8 +25,8 @@ typedef struct romfs_mount {
     uint32_t *dirHashTable, *fileHashTable;
     void *dirTable, *fileTable;
     char name[32];
-    FSFileHandle cafe_fd;
-    FSClient cafe_client;
+    FSAFileHandle cafe_fd;
+    FSAClientHandle cafe_client;
     OSMutex cafe_mutex;
 } romfs_mount;
 
@@ -72,9 +68,7 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
         }
         return read(mount->fd, buffer, size);
     } else if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
-        FSCmdBlock cmd;
-        FSStatus status;
-        FSInitCmdBlock(&cmd);
+        FSError status;
         uint32_t bytesRead = 0;
 
         __attribute__((aligned(0x40))) uint8_t alignedBuffer[0x40];
@@ -86,8 +80,7 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
 
         // read "head
         if (headLen > 0) {
-            status = FSReadFileWithPos(&mount->cafe_client, &cmd, alignedBuffer, 1,
-                                       headLen, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+            status = FSAReadFileWithPos(mount->cafe_client, alignedBuffer, 1, headLen, pos, mount->cafe_fd, 0);
             if (status < 0) {
                 return -1;
             } else if (status > 0) {
@@ -107,8 +100,7 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
         uint32_t bodyLen = remainingLen & ~(0x3F);
         // read "body"
         if (bodyLen > 0) {
-            status = FSReadFileWithPos(&mount->cafe_client, &cmd, (uint8_t *) buffer, 1,
-                                       bodyLen, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+            status = FSAReadFileWithPos(mount->cafe_client, (uint8_t *) buffer, 1, bodyLen, pos, mount->cafe_fd, 0);
             if (status < 0) {
                 return -1;
             } else if (status > 0) {
@@ -125,8 +117,7 @@ static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, ui
         }
 
         // read "tail"
-        status = FSReadFileWithPos(&mount->cafe_client, &cmd, alignedBuffer, 1,
-                                   remainingLen, pos, mount->cafe_fd, 0, FS_ERROR_FLAG_ALL);
+        status = FSAReadFileWithPos(mount->cafe_client, alignedBuffer, 1, remainingLen, pos, mount->cafe_fd, 0);
         if (status < 0) {
             return -1;
         } else if (status > 0) {
@@ -215,6 +206,7 @@ static void _romfsResetMount(romfs_mount *mount, int32_t id) {
     mount->device.name       = mount->name;
     mount->device.deviceData = mount;
     mount->id                = id;
+    mount->cafe_client       = 0;
     DCFlushRange(mount, sizeof(*mount));
 }
 
@@ -280,12 +272,10 @@ static void romfs_mountclose(romfs_mount *mount) {
         close(mount->fd);
     }
     if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
-        FSCmdBlock cmd;
-        FSInitCmdBlock(&cmd);
-        FSCloseFile(&mount->cafe_client, &cmd, mount->cafe_fd, FS_ERROR_FLAG_ALL);
+        FSACloseFile(mount->cafe_client, mount->cafe_fd);
         mount->cafe_fd = 0;
-        FSDelClient(&mount->cafe_client, FS_ERROR_FLAG_ALL);
-        memset(&mount->cafe_client, 0, sizeof(FSClient));
+        FSADelClient(mount->cafe_client);
+        mount->cafe_client = 0;
     }
     romfs_free(mount);
 }
@@ -313,17 +303,15 @@ int32_t romfsMount(const char *name, const char *filepath, RomfsSource source) {
     } else if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
         memset(&mount->cafe_mutex, 0, sizeof(OSMutex));
         OSInitMutex(&mount->cafe_mutex);
-        memset(&mount->cafe_client, 0, sizeof(FSClient));
-        if (FSAddClient(&mount->cafe_client, FS_ERROR_FLAG_ALL) != FS_STATUS_OK) {
+        mount->cafe_client = FSAAddClient(nullptr);
+        if (mount->cafe_client == 0) {
             romfs_free(mount);
             OSMemoryBarrier();
             return -1;
         }
-        FSCmdBlock cmd;
-        FSInitCmdBlock(&cmd);
-        FSStatus result = FSOpenFile(&mount->cafe_client, &cmd, filepath, "r", &mount->cafe_fd, FS_ERROR_FLAG_ALL);
-        if (result != FS_STATUS_OK) {
-            FSDelClient(&mount->cafe_client, FS_ERROR_FLAG_ALL);
+        FSError result = FSAOpenFileEx(mount->cafe_client, filepath, "r", static_cast<FSMode>(0x666), FS_OPEN_FLAG_NONE, 0, &mount->cafe_fd);
+        if (result != FS_ERROR_OK) {
+            FSADelClient(mount->cafe_client);
             romfs_free(mount);
             OSMemoryBarrier();
             return -1;
