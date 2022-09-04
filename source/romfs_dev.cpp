@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "romfs_dev.h"
+#include <coreinit/debug.h>
 #include <mutex>
 
 typedef struct romfs_mount {
@@ -284,6 +285,7 @@ std::mutex romfsMutex;
 
 int32_t romfsMount(const char *name, const char *filepath, RomfsSource source) {
     std::lock_guard<std::mutex> lock(romfsMutex);
+    FSAInit();
     romfs_mount *mount = romfs_alloc();
     if (mount == nullptr) {
         OSMemoryBarrier();
@@ -305,12 +307,14 @@ int32_t romfsMount(const char *name, const char *filepath, RomfsSource source) {
         OSInitMutex(&mount->cafe_mutex);
         mount->cafe_client = FSAAddClient(nullptr);
         if (mount->cafe_client == 0) {
+            OSReport("libromfs: FSAAddClient failed\n");
             romfs_free(mount);
             OSMemoryBarrier();
             return -1;
         }
         FSError result = FSAOpenFileEx(mount->cafe_client, filepath, "r", static_cast<FSMode>(0x666), FS_OPEN_FLAG_NONE, 0, &mount->cafe_fd);
         if (result != FS_ERROR_OK) {
+            OSReport("libromfs: FSAOpenFileEx failed for %s. %s\n", filepath, FSAGetStatusStr(result));
             FSADelClient(mount->cafe_client);
             romfs_free(mount);
             OSMemoryBarrier();
