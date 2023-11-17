@@ -7,6 +7,7 @@
 #include <malloc.h>
 #include <string.h>
 #include <sys/iosupport.h>
+#include <sys/param.h>
 #include <unistd.h>
 
 #include "romfs_dev.h"
@@ -56,74 +57,68 @@ static romfs_file *romFS_file(romfs_mount *mount, uint32_t off) {
     return curFile;
 }
 
-static ssize_t _romfs_read(romfs_mount *mount, uint64_t offset, void *buffer, uint64_t size) {
-    if (size == 0) {
+static ssize_t _romfs_read(romfs_mount *mount, uint64_t readOffset, void *buffer, uint64_t readSize) {
+    if (readSize == 0) {
         return 0;
     }
 
-    uint64_t pos = mount->offset + offset;
+    uint64_t pos = mount->offset + readOffset;
     if (mount->fd_type == RomfsSource_FileDescriptor) {
         off_t seek_offset = lseek(mount->fd, pos, SEEK_SET);
         if (seek_offset < 0 || (off_t) pos != seek_offset) {
             return -1;
         }
-        return read(mount->fd, buffer, size);
+        return read(mount->fd, buffer, readSize);
     } else if (mount->fd_type == RomfsSource_FileDescriptor_CafeOS) {
         FSError status;
         uint32_t bytesRead = 0;
 
         __attribute__((aligned(0x40))) uint8_t alignedBuffer[0x40];
+        uint64_t len = readSize;
+        void *ptr    = buffer;
+        while (bytesRead < len) {
+            // only use input buffer if cache-aligned and read size is a multiple of cache line size
+            // otherwise read into alignedBuffer
+            uint8_t *tmp = (uint8_t *) ptr;
+            size_t size  = len - bytesRead;
 
-        uint32_t ptrAligned      = ((uint32_t) buffer + 0x3F) & ~(0x3F);
-        uint32_t lenToAlignedPtr = ptrAligned - (uint32_t) buffer;
-        uint32_t headLen         = lenToAlignedPtr > size ? size : lenToAlignedPtr;
-        uint32_t remainingLen    = size;
+            if (size < 0x40) {
+                // read partial cache-line back-end
+                tmp = alignedBuffer;
+            } else if ((uintptr_t) ptr & 0x3F) {
+                // read partial cache-line front-end
+                tmp  = alignedBuffer;
+                size = MIN(size, 0x40 - ((uintptr_t) ptr & 0x3F));
+            } else {
+                // read whole cache lines
+                size &= ~0x3F;
+            }
 
-        // read "head
-        if (headLen > 0) {
-            status = FSAReadFileWithPos(mount->cafe_client, alignedBuffer, 1, headLen, pos, mount->cafe_fd, 0);
+            // Limit each request to 1 MiB
+            if (size > 0x100000) {
+                size = 0x100000;
+            }
+
+            status = FSAReadFileWithPos(mount->cafe_client, tmp, 1, size, pos, mount->cafe_fd, 0);
+
             if (status < 0) {
+                if (bytesRead != 0) {
+                    return bytesRead; // error after partial read
+                }
                 return -1;
-            } else if (status > 0) {
-                memcpy(buffer, alignedBuffer, (uint32_t) status);
-                bytesRead += (uint32_t) status;
-                pos += (uint32_t) status;
-                buffer = (void *) ((uint32_t) buffer + status);
-                remainingLen -= status;
             }
 
-            // Return when we've read partial data or finished reading all data
-            if ((uint32_t) status < headLen || remainingLen == 0) {
-                return bytesRead;
-            }
-        }
-
-        uint32_t bodyLen = remainingLen & ~(0x3F);
-        // read "body"
-        if (bodyLen > 0) {
-            status = FSAReadFileWithPos(mount->cafe_client, (uint8_t *) buffer, 1, bodyLen, pos, mount->cafe_fd, 0);
-            if (status < 0) {
-                return -1;
-            } else if (status > 0) {
-                bytesRead += (uint32_t) status;
-                buffer = (void *) ((uint32_t) buffer + status);
-                pos += status;
-                remainingLen -= status;
+            if (tmp == alignedBuffer) {
+                memcpy(ptr, alignedBuffer, status);
             }
 
-            // Return when we've read partial data or finished reading all data
-            if ((uint32_t) status < bodyLen || remainingLen == 0) {
-                return bytesRead;
-            }
-        }
-
-        // read "tail"
-        status = FSAReadFileWithPos(mount->cafe_client, alignedBuffer, 1, remainingLen, pos, mount->cafe_fd, 0);
-        if (status < 0) {
-            return -1;
-        } else if (status > 0) {
-            memcpy(buffer, alignedBuffer, (uint32_t) status);
+            pos += (uint32_t) status;
             bytesRead += (uint32_t) status;
+            ptr = (void *) (((uint32_t) ptr) + status);
+
+            if ((size_t) status != size) {
+                return bytesRead; // partial read
+            }
         }
 
         return bytesRead;
