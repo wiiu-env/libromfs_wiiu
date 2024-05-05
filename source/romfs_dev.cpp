@@ -885,9 +885,7 @@ int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct s
 
     if (iter->state == 0) {
         /* '.' entry */
-        memset(filestat, 0, sizeof(*filestat));
-        filestat->st_ino  = dir_inode(iter->mount, iter->dir);
-        filestat->st_mode = romFS_dir_mode;
+        fillDir(filestat, iter->mount, iter->dir);
 
         strcpy(filename, ".");
         iter->state = 1;
@@ -902,9 +900,7 @@ int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct s
             return -1;
         }
 
-        memset(filestat, 0, sizeof(*filestat));
-        filestat->st_ino  = dir_inode(iter->mount, dir);
-        filestat->st_mode = romFS_dir_mode;
+        fillDir(filestat, iter->mount, dir);
 
         strcpy(filename, "..");
         iter->state = 2;
@@ -922,9 +918,7 @@ int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct s
 
         iter->childDir = dir->sibling;
 
-        memset(filestat, 0, sizeof(*filestat));
-        filestat->st_ino  = dir_inode(iter->mount, dir);
-        filestat->st_mode = romFS_dir_mode;
+        fillDir(filestat, iter->mount, dir);
 
         memset(filename, 0, NAME_MAX);
 
@@ -948,9 +942,7 @@ int romfs_dirnext(struct _reent *r, DIR_ITER *dirState, char *filename, struct s
 
         iter->childFile = file->sibling;
 
-        memset(filestat, 0, sizeof(*filestat));
-        filestat->st_ino  = file_inode(iter->mount, file);
-        filestat->st_mode = romFS_file_mode;
+        fillFile(filestat, iter->mount, file);
 
         memset(filename, 0, NAME_MAX);
 
